@@ -16,12 +16,15 @@ from src.libs.llm.openai_vision_llm import OpenAIVisionLLM, OpenAIVisionLLMError
 from src.libs.llm.azure_llm import AzureLLM, AzureLLMError
 from src.libs.llm.deepseek_llm import DeepSeekLLM, DeepSeekLLMError
 from src.libs.llm.ollama_llm import OllamaLLM, OllamaLLMError
+from src.libs.llm.glm_llm import GLMLLM, GLMLLMError
+from src.libs.llm.glm_vision_llm import GLMVisionLLM, GLMVisionLLMError
 
 # Register text-only LLM providers with factory
 LLMFactory.register_provider("openai", OpenAILLM)
 LLMFactory.register_provider("azure", AzureLLM)
 LLMFactory.register_provider("deepseek", DeepSeekLLM)
 LLMFactory.register_provider("ollama", OllamaLLM)
+LLMFactory.register_provider("glm", GLMLLM)
 
 # Note: Vision LLM providers will be registered in task B9+
 
@@ -47,4 +50,9 @@ __all__ = [
     # Vision LLM implementations
     "OpenAIVisionLLM",
     "OpenAIVisionLLMError",
+    # GLM implementations
+    "GLMLLM",
+    "GLMLLMError",
+    "GLMVisionLLM",
+    "GLMVisionLLMError",
 ]

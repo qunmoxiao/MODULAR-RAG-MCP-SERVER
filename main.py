@@ -1,38 +1,35 @@
 """
 Modular RAG MCP Server - Main Entry Point
 
-This is the entry point for the MCP Server. It initializes the configuration,
-sets up logging, and starts the server.
+This is the entry point for the MCP Server. It starts the MCP server
+using stdio transport for communication with MCP clients.
 """
 
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-from src.core.settings import SettingsError, load_settings
-from src.observability.logger import get_logger
+import sys
+
+from src.mcp_server.server import main as mcp_main
+
+
+def _dispatch_to_cli() -> int:
+    """Dispatch to CLI entrypoint while removing the `cli` token from argv."""
+    from scripts.mcp_cli import main as cli_main
+
+    # `python main.py cli --query ...` -> pass `--query ...` to CLI parser
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    return cli_main()
 
 
 def main() -> int:
+    """Unified entrypoint: MCP server by default, CLI when requested.
+
+    - MCP mode (default): python main.py
+    - CLI mode:           python main.py cli <subcommand> [args...]
     """
-    Main entry point for the MCP Server.
-    
-    Returns:
-        int: Exit code (0 for success, non-zero for failure)
-    """
-    print("Modular RAG MCP Server - Starting...")
-
-    settings_path = Path("config/settings.yaml")
-    try:
-        settings = load_settings(settings_path)
-    except SettingsError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 1
-
-    logger = get_logger(log_level=settings.observability.log_level)
-    logger.info("Settings loaded successfully.")
-    logger.info("MCP Server will be implemented in Phase E.")
-    return 0
-
+    if len(sys.argv) > 1 and sys.argv[1] == "cli":
+        return _dispatch_to_cli()
+    return mcp_main()
 
 if __name__ == "__main__":
     sys.exit(main())

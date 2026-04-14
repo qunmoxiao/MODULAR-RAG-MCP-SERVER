@@ -122,6 +122,32 @@ Agent 会自动引导你完成全部配置流程。
 
 > 💡 如果不熟悉 Skill 的使用方式，请观看配套笔记中的 **Setup Skill 使用讲解视频**。
 
+### 3. 直接通过 CLI 调用（新增）
+
+除了作为 MCP Server 被其他 Agent 调用，你也可以直接通过 CLI 使用同一套能力。
+
+```bash
+# 安装后可直接使用（project script）
+mcp-cli list-collections
+mcp-cli query --query "什么是混合检索" --top-k 5 --collection default
+mcp-cli get-document-summary --doc-id doc_xxx --collection default
+
+# 可选：输出 JSON 结果
+mcp-cli query --query "RAG 评估指标" --json
+```
+
+如果你暂时没有安装为命令，也可以直接运行脚本：
+
+```bash
+python scripts/mcp_cli.py --help
+```
+
+也支持统一入口分发：
+
+```bash
+python main.py cli --help
+```
+
 ---
 
 ## 🎯 谁适合用这个项目 & 怎么用

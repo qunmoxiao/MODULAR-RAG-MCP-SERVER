@@ -1,0 +1,93 @@
+# Modular RAG MCP Server - GLM (Zhipu AI) Configuration
+# 智谱 AI GLM 模型配置示例
+
+# =============================================================================
+# LLM Configuration - GLM
+# =============================================================================
+llm:
+  provider: "glm"
+  model: "glm-4-flash"  # Options: glm-4, glm-4-flash, glm-4-plus, glm-4-air, glm-4-airx
+  api_key: "YOUR_GLM_API_KEY"  # Get from https://open.bigmodel.cn/
+  base_url: "https://open.bigmodel.cn/api/paas/v4"  # GLM API endpoint
+  temperature: 0.0
+  max_tokens: 4096
+
+# =============================================================================
+# Embedding Configuration - GLM
+# =============================================================================
+embedding:
+  provider: "glm"
+  model: "embedding-3"  # GLM embedding model
+  dimensions: 1024  # embedding-3 fixed dimension
+  api_key: "YOUR_GLM_API_KEY"  # Same as LLM API key
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+
+# =============================================================================
+# Vision LLM Configuration - GLM-4V
+# =============================================================================
+vision_llm:
+  enabled: true
+  provider: "glm"
+  model: "glm-4v"  # GLM Vision model
+  api_key: "YOUR_GLM_API_KEY"
+  base_url: "https://open.bigmodel.cn/api/paas/v4"
+  max_image_size: 2048
+
+# =============================================================================
+# Vector Store Configuration
+# =============================================================================
+vector_store:
+  provider: "chroma"
+  persist_directory: "./data/db/chroma"
+  collection_name: "knowledge_hub"
+
+# =============================================================================
+# Retrieval Configuration
+# =============================================================================
+retrieval:
+  dense_top_k: 20
+  sparse_top_k: 20
+  fusion_top_k: 10
+  rrf_k: 60
+
+# =============================================================================
+# Rerank Configuration
+# =============================================================================
+rerank:
+  enabled: false
+  provider: "none"
+  model: "none"
+  top_k: 5
+
+# =============================================================================
+# Evaluation Configuration
+# =============================================================================
+evaluation:
+  enabled: false
+  provider: "custom"
+  metrics:
+    - "hit_rate"
+    - "mrr"
+    - "faithfulness"
+
+# =============================================================================
+# Observability Configuration
+# =============================================================================
+observability:
+  log_level: "INFO"
+  trace_enabled: true
+  trace_file: "./logs/traces.jsonl"
+  structured_logging: true
+
+# =============================================================================
+# Ingestion Configuration
+# =============================================================================
+ingestion:
+  chunk_size: 1000
+  chunk_overlap: 200
+  splitter: "recursive"
+  batch_size: 100
+  chunk_refiner:
+    use_llm: true
+  metadata_enricher:
+    use_llm: true
