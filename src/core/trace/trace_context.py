@@ -26,6 +26,7 @@ class TraceContext:
 
     trace_type: Literal["query", "ingestion"] = "query"
     trace_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: Optional[str] = field(default=None)
     started_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     finished_at: Optional[str] = field(default=None)
     stages: List[Dict[str, Any]] = field(default_factory=list)
@@ -103,7 +104,7 @@ class TraceContext:
         Returns:
             Dictionary with all trace data.
         """
-        return {
+        result = {
             "trace_id": self.trace_id,
             "trace_type": self.trace_type,
             "started_at": self.started_at,
@@ -112,6 +113,9 @@ class TraceContext:
             "stages": list(self.stages),
             "metadata": dict(self.metadata),
         }
+        if self.session_id is not None:
+            result["session_id"] = self.session_id
+        return result
 
     # ---- backwards-compat helper used in C5 / C6 -----------------------
 

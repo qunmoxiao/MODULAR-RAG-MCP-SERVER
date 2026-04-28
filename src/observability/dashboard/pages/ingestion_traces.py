@@ -1,14 +1,14 @@
-"""Ingestion Traces page – browse ingestion trace history with per-stage detail.
+"""Ingestion Traces page – two-level session → file detail view.
 
 Layout:
-1. Trace list (reverse-chronological, filtered to trace_type=="ingestion")
-2. Pipeline overview: source file, total time, stage timing waterfall
-3. Per-stage detail tabs:
-   📄 Load    – raw document text preview
-   ✂️ Split   – chunk list with text
-   🔄 Transform – before/after diff, enrichment metadata
-   🔢 Embed   – vector stats
-   💾 Upsert  – stored IDs
+1. **Session list** (reverse-chronological):
+   Each ingestion run is a session card showing time, file count, success/fail,
+   total chunks and images.
+2. **File detail** (within expanded session):
+   Per-file trace with pipeline overview, stage timings, diagnostics, and
+   per-stage detail tabs (Load / Split / Transform / Embed / Upsert).
+
+Legacy traces (without ``session_id``) are auto-clustered by 5-minute windows.
 """
 
 from __future__ import annotations
@@ -25,117 +25,173 @@ logger = logging.getLogger(__name__)
 
 def render() -> None:
     """Render the Ingestion Traces page."""
-    st.header("🔬 Ingestion Traces")
+    st.header("Ingestion Traces")
 
     svc = TraceService()
-    traces = svc.list_traces(trace_type="ingestion")
+    sessions = svc.list_sessions(trace_type="ingestion")
 
-    if not traces:
+    if not sessions:
         st.info("No ingestion traces recorded yet. Run an ingestion first!")
         return
 
-    st.subheader(f"📋 Trace History ({len(traces)})")
+    total_traces = sum(s["file_count"] for s in sessions)
+    st.subheader(f"Ingestion Sessions ({len(sessions)} sessions, {total_traces} files)")
 
-    for idx, trace in enumerate(traces):
-        trace_id = trace.get("trace_id", "unknown")
-        started = trace.get("started_at", "—")
-        total_ms = trace.get("elapsed_ms")
-        total_label = f"{total_ms:.0f} ms" if total_ms is not None else "—"
-        meta = trace.get("metadata", {})
-        source_path = meta.get("source_path", "—")
+    for s_idx, session in enumerate(sessions):
+        sid = session["session_id"]
+        started = session["started_at"]
+        file_count = session["file_count"]
+        ok = session["success_count"]
+        fail = session["fail_count"]
+        chunks = session["total_chunks"]
+        images = session["total_images"]
+        is_legacy = sid.startswith("legacy-")
 
-        # Build expander title
-        file_name = source_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1] if source_path != "—" else "—"
-        expander_title = f"📄 **{file_name}** · {total_label} · {started[:19]}"
+        # Session expander title
+        time_label = started[:19].replace("T", " ") if started else "—"
+        status_icon = "!" if fail > 0 else ">"
+        legacy_tag = " [legacy]" if is_legacy else ""
+        session_title = (
+            f"[{status_icon}] {time_label}{legacy_tag} — "
+            f"{file_count} files ({ok} ok / {fail} fail) — "
+            f"{chunks} chunks, {images} images"
+        )
 
-        with st.expander(expander_title, expanded=(idx == 0)):
-            timings = svc.get_stage_timings(trace)
-            stages_by_name = {t["stage_name"]: t for t in timings}
-
-            # ── 1. Overview metrics ────────────────────────────
-            st.markdown("#### 📊 Pipeline Overview")
-            st.caption(f"Source: `{source_path}`")
-
-            load_d = stages_by_name.get("load", {}).get("data", {})
-            split_d = stages_by_name.get("split", {}).get("data", {})
-            transform_d = stages_by_name.get("transform", {}).get("data", {})
-            embed_d = stages_by_name.get("embed", {}).get("data", {})
-            upsert_d = stages_by_name.get("upsert", {}).get("data", {})
-
+        with st.expander(session_title, expanded=(s_idx == 0)):
+            # Session summary metrics
             c1, c2, c3, c4, c5 = st.columns(5)
             with c1:
-                st.metric("Doc Length", f"{load_d.get('text_length', 0):,} chars")
+                st.metric("Files", file_count)
             with c2:
-                st.metric("Chunks", split_d.get("chunk_count", 0))
+                st.metric("Success", ok)
             with c3:
-                st.metric("Images", load_d.get("image_count", 0))
+                st.metric("Failed", fail)
             with c4:
-                st.metric("Vectors", upsert_d.get("vector_count", 0))
+                st.metric("Chunks", chunks)
             with c5:
-                st.metric("Total Time", total_label)
+                st.metric("Images", images)
+
+            if not is_legacy:
+                st.caption(f"Session ID: `{sid}`")
 
             st.divider()
 
-            # ── 2. Stage timing waterfall ──────────────────────
-            # Filter to main pipeline stages only (not sub-stages)
-            main_stages = [
-                t for t in timings
-                if t["stage_name"] in ("load", "split", "transform", "embed", "upsert")
-            ]
-            if main_stages:
-                st.markdown("#### ⏱️ Stage Timings")
-                chart_data = {t["stage_name"]: t["elapsed_ms"] for t in main_stages}
-                st.bar_chart(chart_data, horizontal=True)
-                st.table([
-                    {
-                        "Stage": t["stage_name"],
-                        "Elapsed (ms)": round(t["elapsed_ms"], 2),
-                    }
-                    for t in main_stages
-                ])
+            # Per-file traces within session
+            traces = session["traces"]
+            for t_idx, trace in enumerate(traces):
+                # Use a globally unique index for streamlit keys
+                global_idx = f"{s_idx}_{t_idx}"
+                _render_file_trace(svc, trace, global_idx)
 
-            # ── Diagnostics ───────────────────────────────────
-            _render_ingestion_diagnostics(stages_by_name, load_d, split_d, transform_d, embed_d, upsert_d)
 
-            st.divider()
+def _render_file_trace(
+    svc: TraceService,
+    trace: Dict[str, Any],
+    unique_key: str,
+) -> None:
+    """Render a single file's trace detail inside a session expander."""
+    started = trace.get("started_at", "—")
+    total_ms = trace.get("total_elapsed_ms", trace.get("elapsed_ms"))
+    total_label = f"{total_ms:.0f} ms" if total_ms is not None else "—"
+    meta = trace.get("metadata", {})
+    source_path = meta.get("source_path", "—")
 
-            # ── 3. Per-stage detail tabs ───────────────────────
-            st.markdown("#### 🔍 Stage Details")
+    file_name = (
+        source_path.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+        if source_path != "—"
+        else "—"
+    )
+    file_title = f"{file_name} — {total_label} — {started[:19]}"
 
-            tab_defs = []
-            if "load" in stages_by_name:
-                tab_defs.append(("📄 Load", "load"))
-            if "split" in stages_by_name:
-                tab_defs.append(("✂️ Split", "split"))
-            if "transform" in stages_by_name:
-                tab_defs.append(("🔄 Transform", "transform"))
-            if "embed" in stages_by_name:
-                tab_defs.append(("🔢 Embed", "embed"))
-            if "upsert" in stages_by_name:
-                tab_defs.append(("💾 Upsert", "upsert"))
+    with st.expander(file_title, expanded=False):
+        timings = svc.get_stage_timings(trace)
+        stages_by_name = {t["stage_name"]: t for t in timings}
 
-            if tab_defs:
-                tabs = st.tabs([label for label, _ in tab_defs])
-                for tab, (label, key) in zip(tabs, tab_defs):
-                    with tab:
-                        stage = stages_by_name[key]
-                        data = stage.get("data", {})
-                        elapsed = stage.get("elapsed_ms")
-                        if elapsed is not None:
-                            st.caption(f"⏱️ {elapsed:.1f} ms")
+        # ── 1. Overview metrics ────────────────────────────
+        st.markdown("#### Pipeline Overview")
+        st.caption(f"Source: `{source_path}`")
 
-                        if key == "load":
-                            _render_load_stage(data, trace_idx=idx)
-                        elif key == "split":
-                            _render_split_stage(data, trace_idx=idx)
-                        elif key == "transform":
-                            _render_transform_stage(data, trace_idx=idx)
-                        elif key == "embed":
-                            _render_embed_stage(data)
-                        elif key == "upsert":
-                            _render_upsert_stage(data)
-            else:
-                st.info("No stage details available.")
+        load_d = stages_by_name.get("load", {}).get("data", {})
+        split_d = stages_by_name.get("split", {}).get("data", {})
+        transform_d = stages_by_name.get("transform", {}).get("data", {})
+        embed_d = stages_by_name.get("embed", {}).get("data", {})
+        upsert_d = stages_by_name.get("upsert", {}).get("data", {})
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        with c1:
+            st.metric("Doc Length", f"{load_d.get('text_length', 0):,} chars")
+        with c2:
+            st.metric("Chunks", split_d.get("chunk_count", 0))
+        with c3:
+            st.metric("Images", load_d.get("image_count", 0))
+        with c4:
+            st.metric("Vectors", upsert_d.get("vector_count", 0))
+        with c5:
+            st.metric("Total Time", total_label)
+
+        st.divider()
+
+        # ── 2. Stage timing waterfall ──────────────────────
+        main_stages = [
+            t for t in timings
+            if t["stage_name"] in ("load", "split", "transform", "embed", "upsert")
+        ]
+        if main_stages:
+            st.markdown("#### Stage Timings")
+            chart_data = {t["stage_name"]: t["elapsed_ms"] for t in main_stages}
+            st.bar_chart(chart_data, horizontal=True)
+            st.table([
+                {
+                    "Stage": t["stage_name"],
+                    "Elapsed (ms)": round(t["elapsed_ms"], 2),
+                }
+                for t in main_stages
+            ])
+
+        # ── Diagnostics ───────────────────────────────────
+        _render_ingestion_diagnostics(
+            stages_by_name, load_d, split_d, transform_d, embed_d, upsert_d,
+        )
+
+        st.divider()
+
+        # ── 3. Per-stage detail tabs ───────────────────────
+        st.markdown("#### Stage Details")
+
+        tab_defs = []
+        if "load" in stages_by_name:
+            tab_defs.append(("Load", "load"))
+        if "split" in stages_by_name:
+            tab_defs.append(("Split", "split"))
+        if "transform" in stages_by_name:
+            tab_defs.append(("Transform", "transform"))
+        if "embed" in stages_by_name:
+            tab_defs.append(("Embed", "embed"))
+        if "upsert" in stages_by_name:
+            tab_defs.append(("Upsert", "upsert"))
+
+        if tab_defs:
+            tabs = st.tabs([label for label, _ in tab_defs])
+            for tab, (label, key) in zip(tabs, tab_defs):
+                with tab:
+                    stage = stages_by_name[key]
+                    data = stage.get("data", {})
+                    elapsed = stage.get("elapsed_ms")
+                    if elapsed is not None:
+                        st.caption(f"{elapsed:.1f} ms")
+
+                    if key == "load":
+                        _render_load_stage(data, trace_idx=unique_key)
+                    elif key == "split":
+                        _render_split_stage(data, trace_idx=unique_key)
+                    elif key == "transform":
+                        _render_transform_stage(data, trace_idx=unique_key)
+                    elif key == "embed":
+                        _render_embed_stage(data)
+                    elif key == "upsert":
+                        _render_upsert_stage(data)
+        else:
+            st.info("No stage details available.")
 
 
 def _render_ingestion_diagnostics(
@@ -199,7 +255,7 @@ def _render_ingestion_diagnostics(
 # Per-stage renderers
 # ═══════════════════════════════════════════════════════════════
 
-def _render_load_stage(data: Dict[str, Any], *, trace_idx: int = 0) -> None:
+def _render_load_stage(data: Dict[str, Any], *, trace_idx: Any = 0) -> None:
     """Render Load stage: raw document preview."""
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -224,7 +280,7 @@ def _render_load_stage(data: Dict[str, Any], *, trace_idx: int = 0) -> None:
         st.info("No text preview recorded in this trace.")
 
 
-def _render_split_stage(data: Dict[str, Any], *, trace_idx: int = 0) -> None:
+def _render_split_stage(data: Dict[str, Any], *, trace_idx: Any = 0) -> None:
     """Render Split stage: chunk list with texts."""
     c1, c2 = st.columns(2)
     with c1:
@@ -253,7 +309,7 @@ def _render_split_stage(data: Dict[str, Any], *, trace_idx: int = 0) -> None:
         st.info("No chunk text recorded. Re-run ingestion to generate new traces.")
 
 
-def _render_transform_stage(data: Dict[str, Any], *, trace_idx: int = 0) -> None:
+def _render_transform_stage(data: Dict[str, Any], *, trace_idx: Any = 0) -> None:
     """Render Transform stage: before/after refinement + enrichment metadata."""
     # Summary metrics
     c1, c2, c3 = st.columns(3)

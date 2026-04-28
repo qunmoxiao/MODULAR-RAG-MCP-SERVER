@@ -26,6 +26,7 @@ Exit codes:
 import argparse
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -253,12 +254,14 @@ def main() -> int:
     results: List[PipelineResult] = []
     
     collector = TraceCollector()
+    session_id = uuid.uuid4().hex[:12]
+    print(f"   Session ID: {session_id}")
 
     for i, file_path in enumerate(files, 1):
         print(f"\n[{i}/{len(files)}] Processing: {file_path}")
-        
+
         try:
-            trace = TraceContext(trace_type="ingestion")
+            trace = TraceContext(trace_type="ingestion", session_id=session_id)
             trace.metadata["source_path"] = str(file_path)
             result = pipeline.run(str(file_path), trace=trace)
             collector.collect(trace)
