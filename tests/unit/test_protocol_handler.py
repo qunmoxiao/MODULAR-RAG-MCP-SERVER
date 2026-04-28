@@ -373,6 +373,8 @@ class TestGetCapabilities:
 
         caps = protocol_handler.get_capabilities()
         assert "tools" in caps
+        assert "resources" in caps
+        assert "prompts" in caps
 
 
 # ============================================================================

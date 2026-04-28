@@ -129,6 +129,9 @@ class RetrievalSettings:
     sparse_top_k: int
     fusion_top_k: int
     rrf_k: int
+    rrf_weights: Dict[str, float]
+    doc_aggregation: Dict[str, Any]
+    feedback_loop: Dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -186,6 +189,7 @@ class Settings:
     rerank: RerankSettings
     evaluation: EvaluationSettings
     observability: ObservabilitySettings
+    wiki_builder: Dict[str, Any]
     ingestion: Optional[IngestionSettings] = None
     vision_llm: Optional[VisionLLMSettings] = None
 
@@ -261,6 +265,17 @@ class Settings:
                 sparse_top_k=_require_int(retrieval, "sparse_top_k", "retrieval"),
                 fusion_top_k=_require_int(retrieval, "fusion_top_k", "retrieval"),
                 rrf_k=_require_int(retrieval, "rrf_k", "retrieval"),
+                rrf_weights={
+                    "dense": float(retrieval.get("rrf_weights", {}).get("dense", 1.0)),
+                    "sparse": float(retrieval.get("rrf_weights", {}).get("sparse", 1.0)),
+                },
+                doc_aggregation=retrieval.get(
+                    "doc_aggregation", {"enabled": False, "tail_decay": 0.5}
+                ),
+                feedback_loop=retrieval.get(
+                    "feedback_loop",
+                    {"enabled": False, "log_path": "./logs/qa_feedback.jsonl"},
+                ),
             ),
             rerank=RerankSettings(
                 enabled=_require_bool(rerank, "enabled", "rerank"),
@@ -278,6 +293,16 @@ class Settings:
                 trace_enabled=_require_bool(observability, "trace_enabled", "observability"),
                 trace_file=_require_str(observability, "trace_file", "observability"),
                 structured_logging=_require_bool(observability, "structured_logging", "observability"),
+            ),
+            wiki_builder=data.get(
+                "wiki_builder",
+                {
+                    "enabled": False,
+                    "batch_window_minutes": 15,
+                    "promote_threshold": 0.80,
+                    "candidate_threshold": 0.55,
+                    "dual_write_markdown": True,
+                },
             ),
             ingestion=ingestion_settings,
             vision_llm=vision_llm_settings,
@@ -303,16 +328,27 @@ def validate_settings(settings: Settings) -> None:
         raise SettingsError("Missing required field: evaluation.provider")
     if not settings.observability.log_level:
         raise SettingsError("Missing required field: observability.log_level")
+    dense_weight = float(settings.retrieval.rrf_weights.get("dense", 0.0))
+    sparse_weight = float(settings.retrieval.rrf_weights.get("sparse", 0.0))
+    if dense_weight <= 0 or sparse_weight <= 0:
+        raise SettingsError("Invalid retrieval.rrf_weights: dense and sparse must be > 0")
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
     """Load settings from a YAML file and validate required fields.
 
     Args:
-        path: Path to settings YAML.  Defaults to
+        path: Path to settings YAML.  Defaults to the ``RAG_SETTINGS``
+            environment variable when set, otherwise
             ``<repo>/config/settings.yaml`` (absolute, CWD-independent).
     """
-    settings_path = Path(path) if path is not None else DEFAULT_SETTINGS_PATH
+    import os
+
+    if path is None:
+        env_path = os.environ.get("RAG_SETTINGS")
+        settings_path = Path(env_path) if env_path else DEFAULT_SETTINGS_PATH
+    else:
+        settings_path = Path(path)
     if not settings_path.is_absolute():
         settings_path = resolve_path(settings_path)
     if not settings_path.exists():

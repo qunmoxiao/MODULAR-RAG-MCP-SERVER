@@ -104,3 +104,48 @@ class GLMVisionLLM(OpenAIVisionLLM):
 
         # Override error class for GLM-specific error messages
         self._error_class = GLMVisionLLMError
+
+    def _call_api(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> dict:
+        """Make HTTP request to the GLM Vision API.
+
+        GLM Vision API (glm-4v-flash) rejects `temperature` and `max_tokens`
+        parameters, so we exclude them from the payload.
+        """
+        import httpx
+
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+        }
+
+        try:
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(url, json=payload, headers=headers)
+
+                if response.status_code != 200:
+                    error_detail = self._parse_error_response(response)
+                    raise GLMVisionLLMError(
+                        f"[GLM Vision] API error (HTTP {response.status_code}): {error_detail}"
+                    )
+
+                return response.json()
+        except httpx.TimeoutException as e:
+            raise GLMVisionLLMError(
+                "[GLM Vision] Request timed out after 60 seconds"
+            ) from e
+        except httpx.RequestError as e:
+            raise GLMVisionLLMError(
+                f"[GLM Vision] Connection failed: {type(e).__name__}: {e}"
+            ) from e

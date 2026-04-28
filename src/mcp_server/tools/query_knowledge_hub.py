@@ -25,6 +25,9 @@ from src.core.response.response_builder import ResponseBuilder, MCPToolResponse
 from src.core.settings import load_settings, resolve_path, Settings
 from src.core.trace import TraceContext, TraceCollector
 from src.core.types import RetrievalResult
+from src.knowledge.candidate_fact_extractor import CandidateFactExtractor
+from src.knowledge.qa_event_store import QAEventStore
+from src.observability.qa_feedback_logger import QAFeedbackLogger
 
 if TYPE_CHECKING:
     from src.core.query_engine.hybrid_search import HybridSearch
@@ -81,8 +84,10 @@ class QueryKnowledgeHubConfig:
     """
     default_top_k: int = 5
     max_top_k: int = 20
-    default_collection: str = "default"
+    default_collection: str = "knowledge_hub"
     enable_rerank: bool = True
+    enable_doc_aggregation: bool = True
+    doc_aggregation_tail_decay: float = 0.5
 
 
 class QueryKnowledgeHubTool:
@@ -125,6 +130,10 @@ class QueryKnowledgeHubTool:
         self._reranker = reranker
         self._embedding_client = None
         self._response_builder = response_builder or ResponseBuilder()
+        self._qa_feedback_logger = QAFeedbackLogger()
+        self._qa_event_store = QAEventStore(str(resolve_path("data/db/wiki/qa_events.db")))
+        self._candidate_extractor = CandidateFactExtractor()
+        self._wiki_builder_enabled = False
         
         # Track initialization state
         self._initialized = False
@@ -135,6 +144,36 @@ class QueryKnowledgeHubTool:
         """Get settings, loading if necessary."""
         if self._settings is None:
             self._settings = load_settings()
+        if self.config.default_collection == "knowledge_hub":
+            configured_collection = getattr(
+                self._settings.vector_store, "collection_name", "knowledge_hub"
+            )
+            self.config.default_collection = configured_collection
+
+        retrieval_cfg = getattr(self._settings, "retrieval", None)
+        if retrieval_cfg is not None:
+            doc_agg_cfg = getattr(retrieval_cfg, "doc_aggregation", {}) or {}
+            self.config.enable_doc_aggregation = bool(
+                doc_agg_cfg.get("enabled", self.config.enable_doc_aggregation)
+            )
+            self.config.doc_aggregation_tail_decay = float(
+                doc_agg_cfg.get(
+                    "tail_decay",
+                    self.config.doc_aggregation_tail_decay,
+                )
+            )
+            feedback_cfg = getattr(retrieval_cfg, "feedback_loop", {}) or {}
+            self._qa_feedback_logger.enabled = bool(
+                feedback_cfg.get("enabled", self._qa_feedback_logger.enabled)
+            )
+            log_path = feedback_cfg.get("log_path")
+            if log_path:
+                self._qa_feedback_logger = QAFeedbackLogger(
+                    log_path=log_path,
+                    enabled=self._qa_feedback_logger.enabled,
+                )
+        wiki_cfg = getattr(self._settings, "wiki_builder", {}) or {}
+        self._wiki_builder_enabled = bool(wiki_cfg.get("enabled", False))
         return self._settings
     
     def _ensure_initialized(self, collection: str) -> None:
@@ -280,6 +319,10 @@ class QueryKnowledgeHubTool:
                 results = await asyncio.to_thread(
                     self._apply_rerank, query, results, effective_top_k, trace,
                 )
+
+            # Aggregate chunk-level matches to document-level relevance.
+            if self.config.enable_doc_aggregation and results:
+                results = self._aggregate_results_by_document(results, effective_top_k)
             
             # Build response
             response = self._response_builder.build(
@@ -304,15 +347,93 @@ class QueryKnowledgeHubTool:
                 f"query_knowledge_hub completed: {len(results)} results, "
                 f"is_empty={response.is_empty}"
             )
+            self._qa_feedback_logger.log_event(
+                self._build_feedback_event(
+                    query=query,
+                    collection=effective_collection,
+                    top_k=effective_top_k,
+                    results=results,
+                )
+            )
+            self._persist_qa_knowledge(
+                query=query,
+                collection=effective_collection,
+                response=response,
+                results=results,
+            )
             
             TraceCollector().collect(trace)
             return response
             
         except Exception as e:
             logger.exception(f"query_knowledge_hub failed: {e}")
+            self._qa_feedback_logger.log_event(
+                {
+                    "query": query,
+                    "collection": effective_collection,
+                    "top_k": effective_top_k,
+                    "result_count": 0,
+                    "final_chunk_ids": [],
+                    "follow_up": False,
+                    "error": str(e),
+                }
+            )
             TraceCollector().collect(trace)
             # Return error response
             return self._build_error_response(query, effective_collection, str(e))
+
+    def _persist_qa_knowledge(
+        self,
+        query: str,
+        collection: str,
+        response: MCPToolResponse,
+        results: List[RetrievalResult],
+        qa_event_store: Optional[Any] = None,
+        candidate_extractor: Optional[Any] = None,
+    ) -> None:
+        """Persist QA event and extract candidate facts."""
+        if not self._wiki_builder_enabled:
+            return
+        try:
+            store = qa_event_store or self._qa_event_store
+            extractor = candidate_extractor or self._candidate_extractor
+            citations = [r.chunk_id for r in results[:5]]
+            event_id = store.insert_event(
+                query=query,
+                collection=collection,
+                answer=response.content,
+                citations=citations,
+            )
+            extracted = extractor.extract(
+                query=query,
+                answer=response.content,
+                citations=citations,
+            )
+            if extracted:
+                logger.debug(
+                    "Extracted %s candidate facts from event %s",
+                    len(extracted),
+                    event_id,
+                )
+        except Exception as exc:
+            logger.warning("Persist QA knowledge skipped due to side-effect error: %s", exc)
+
+    def _build_feedback_event(
+        self,
+        query: str,
+        collection: str,
+        top_k: int,
+        results: List[RetrievalResult],
+    ) -> Dict[str, Any]:
+        """Build normalized feedback payload for QA loop logging."""
+        return {
+            "query": query,
+            "collection": collection,
+            "top_k": top_k,
+            "result_count": len(results),
+            "final_chunk_ids": [r.chunk_id for r in results[:5]],
+            "follow_up": False,
+        }
     
     def _perform_search(
         self,
@@ -387,6 +508,57 @@ class QueryKnowledgeHubTool:
         except Exception as e:
             logger.warning(f"Reranking failed, using original order: {e}")
             return results[:top_k]
+
+    def _aggregate_results_by_document(
+        self,
+        results: List[RetrievalResult],
+        top_k: int,
+    ) -> List[RetrievalResult]:
+        """Aggregate chunk-level retrieval results to document-level rankings.
+
+        The same document often appears in multiple chunks. To reduce noisy
+        duplicate snippets in final answers, we merge chunks by source document
+        and compute a weighted score:
+        - best chunk score gets highest weight
+        - tail chunks add diminishing contribution
+        """
+        if not results:
+            return []
+
+        grouped: Dict[str, List[RetrievalResult]] = {}
+        for item in results:
+            source_key = (
+                item.metadata.get("source_ref")
+                or item.metadata.get("doc_id")
+                or item.metadata.get("source_path")
+                or item.metadata.get("source")
+                or item.chunk_id
+            )
+            grouped.setdefault(str(source_key), []).append(item)
+
+        aggregated: List[RetrievalResult] = []
+        for group in grouped.values():
+            group.sort(key=lambda r: r.score, reverse=True)
+            best = group[0]
+            weighted_score = best.score
+            for index, tail in enumerate(group[1:], start=2):
+                weighted_score += (
+                    tail.score * (self.config.doc_aggregation_tail_decay / index)
+                )
+            merged_metadata = best.metadata.copy()
+            merged_metadata["chunk_count"] = len(group)
+            merged_metadata["aggregated_chunk_ids"] = [r.chunk_id for r in group[:5]]
+            aggregated.append(
+                RetrievalResult(
+                    chunk_id=best.chunk_id,
+                    score=weighted_score,
+                    text=best.text,
+                    metadata=merged_metadata,
+                )
+            )
+
+        aggregated.sort(key=lambda r: r.score, reverse=True)
+        return aggregated[:top_k]
     
     def _build_error_response(
         self,

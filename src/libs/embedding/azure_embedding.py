@@ -38,6 +38,10 @@ class AzureEmbedding(BaseEmbedding):
     """
     
     DEFAULT_API_VERSION = "2024-02-01"
+
+    @staticmethod
+    def _valid_str(value: Any) -> Optional[str]:
+        return value.strip() if isinstance(value, str) and value.strip() else None
     
     def __init__(
         self,
@@ -62,7 +66,7 @@ class AzureEmbedding(BaseEmbedding):
         # Azure uses 'deployment_name' instead of 'model'
         # Try settings.embedding.deployment_name first, fallback to model
         self.deployment_name = (
-            getattr(settings.embedding, 'deployment_name', None) or 
+            self._valid_str(getattr(settings.embedding, 'deployment_name', None)) or
             settings.embedding.model
         )
         
@@ -71,10 +75,10 @@ class AzureEmbedding(BaseEmbedding):
         
         # API key: explicit parameter > settings.yaml > env var (fallback for backward compatibility)
         self.api_key = (
-            api_key or 
-            getattr(settings.embedding, 'api_key', None) or
-            os.environ.get("AZURE_OPENAI_API_KEY") or
-            os.environ.get("OPENAI_API_KEY")
+            self._valid_str(api_key)
+            or self._valid_str(os.environ.get("AZURE_OPENAI_API_KEY"))
+            or self._valid_str(os.environ.get("OPENAI_API_KEY"))
+            or self._valid_str(getattr(settings.embedding, 'api_key', None))
         )
         if not self.api_key:
             raise ValueError(
@@ -84,9 +88,9 @@ class AzureEmbedding(BaseEmbedding):
         
         # Azure endpoint: explicit parameter > settings.yaml > env var (fallback)
         self.azure_endpoint = (
-            azure_endpoint or
-            getattr(settings.embedding, 'azure_endpoint', None) or
-            os.environ.get("AZURE_OPENAI_ENDPOINT")
+            self._valid_str(azure_endpoint)
+            or self._valid_str(os.environ.get("AZURE_OPENAI_ENDPOINT"))
+            or self._valid_str(getattr(settings.embedding, 'azure_endpoint', None))
         )
         if not self.azure_endpoint:
             raise ValueError(

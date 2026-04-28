@@ -146,6 +146,9 @@ class SparseEncoder:
         """
         tokens: List[str] = []
 
+        # Preserve composite alnum terms such as "gpt-4", "deep_learning".
+        composite_terms = re.findall(r"[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)+", text)
+
         # Use jieba to segment the text (handles both Chinese and English)
         raw_tokens = jieba.lcut(text)
 
@@ -162,6 +165,9 @@ class SparseEncoder:
         # Apply lowercase if configured
         if self.lowercase:
             tokens = [t.lower() for t in tokens]
+            composite_terms = [t.lower() for t in composite_terms]
+
+        tokens.extend(composite_terms)
         
         # Filter by minimum length
         terms = [t for t in tokens if len(t) >= self.min_term_length]

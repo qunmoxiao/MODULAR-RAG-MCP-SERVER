@@ -77,6 +77,9 @@ class HybridSearchConfig:
     enable_sparse: bool = True
     parallel_retrieval: bool = True
     metadata_filter_post: bool = True
+    rrf_weights: Dict[str, float] = field(
+        default_factory=lambda: {"dense": 1.0, "sparse": 1.0}
+    )
 
 
 @dataclass
@@ -198,6 +201,9 @@ class HybridSearch:
             enable_sparse=True,
             parallel_retrieval=True,
             metadata_filter_post=True,
+            rrf_weights=getattr(
+                retrieval_config, "rrf_weights", {"dense": 1.0, "sparse": 1.0}
+            ),
         )
     
     def search(
@@ -617,11 +623,21 @@ class HybridSearch:
             return ranking_lists[0][:top_k]
         
         _t0 = time.monotonic()
-        fused = self.fusion.fuse(
-            ranking_lists=ranking_lists,
-            top_k=top_k,
-            trace=trace,
-        )
+        dense_weight = float(self.config.rrf_weights.get("dense", 1.0))
+        sparse_weight = float(self.config.rrf_weights.get("sparse", 1.0))
+        if dense_weight != 1.0 or sparse_weight != 1.0:
+            fused = self.fusion.fuse_with_weights(
+                ranking_lists=ranking_lists,
+                weights=[dense_weight, sparse_weight],
+                top_k=top_k,
+                trace=trace,
+            )
+        else:
+            fused = self.fusion.fuse(
+                ranking_lists=ranking_lists,
+                top_k=top_k,
+                trace=trace,
+            )
         _elapsed = (time.monotonic() - _t0) * 1000.0
         if trace is not None:
             trace.record_stage("fusion", {

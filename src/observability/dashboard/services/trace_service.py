@@ -84,6 +84,10 @@ class TraceService:
             stage_data = s.get("data", {})
             if not isinstance(stage_data, dict):
                 stage_data = {}
+            # Backward compatibility: older traces store stage fields at top level
+            # (e.g., {"stage":"load","method":"pdf"}) instead of nested data.
+            if "method" in s and "method" not in stage_data:
+                stage_data = {**stage_data, "method": s.get("method")}
             timings.append(
                 {
                     "stage_name": s.get("stage"),

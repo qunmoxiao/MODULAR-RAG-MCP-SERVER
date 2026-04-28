@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 from mcp import types
 from mcp.server.lowlevel import Server
 
+from src.mcp_server.resource_prompt_registry import ResourcePromptRegistry
 from src.observability.logger import get_logger
 
 
@@ -186,6 +187,8 @@ class ProtocolHandler:
         """
         return {
             "tools": {} if self.tools else {},
+            "resources": {},
+            "prompts": {},
         }
 
 
@@ -236,7 +239,7 @@ def create_mcp_server(
         )
 
     # Register default tools if requested
-    if register_tools:
+    if register_tools and not protocol_handler.tools:
         _register_default_tools(protocol_handler)
 
     # Create low-level server
@@ -255,6 +258,31 @@ def create_mcp_server(
     ) -> types.CallToolResult:
         """Handle tools/call request."""
         return await protocol_handler.execute_tool(name, arguments)
+
+    registry = ResourcePromptRegistry()
+
+    @server.list_resources()
+    async def handle_list_resources() -> List[types.Resource]:
+        """Handle resources/list request."""
+        return registry.list_resources()
+
+    @server.read_resource()
+    async def handle_read_resource(uri: str) -> types.ReadResourceResult:
+        """Handle resources/read request."""
+        return registry.read_resource(uri)
+
+    @server.list_prompts()
+    async def handle_list_prompts() -> List[types.Prompt]:
+        """Handle prompts/list request."""
+        return registry.list_prompts()
+
+    @server.get_prompt()
+    async def handle_get_prompt(
+        name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> types.GetPromptResult:
+        """Handle prompts/get request."""
+        return registry.get_prompt(name, arguments or {})
 
     # Store protocol handler on server for access
     server._protocol_handler = protocol_handler  # type: ignore[attr-defined]

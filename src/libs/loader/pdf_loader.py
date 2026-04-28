@@ -121,6 +121,8 @@ class PdfLoader(BaseLoader):
         
         # Handle image extraction (with graceful degradation)
         if self.extract_images:
+            # Keep metadata shape stable even when extraction is unavailable.
+            metadata["images"] = []
             try:
                 text_content, images_metadata = self._extract_and_process_images(
                     path, text_content, doc_hash

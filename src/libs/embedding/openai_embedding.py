@@ -37,6 +37,10 @@ class OpenAIEmbedding(BaseEmbedding):
     """
     
     DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
+    @staticmethod
+    def _valid_str(value: Any) -> Optional[str]:
+        return value.strip() if isinstance(value, str) and value.strip() else None
     
     def __init__(
         self,
@@ -67,9 +71,9 @@ class OpenAIEmbedding(BaseEmbedding):
         
         # API key: explicit > settings > env var
         self.api_key = (
-            api_key
-            or getattr(settings.embedding, 'api_key', None)
-            or os.environ.get("OPENAI_API_KEY")
+            self._valid_str(api_key)
+            or self._valid_str(getattr(settings.embedding, 'api_key', None))
+            or self._valid_str(os.environ.get("OPENAI_API_KEY"))
         )
         if not self.api_key:
             raise ValueError(
@@ -78,7 +82,7 @@ class OpenAIEmbedding(BaseEmbedding):
             )
         
         # Azure-compatible mode detection
-        azure_endpoint = getattr(settings.embedding, 'azure_endpoint', None)
+        azure_endpoint = self._valid_str(getattr(settings.embedding, 'azure_endpoint', None))
         self.api_version = getattr(settings.embedding, 'api_version', None)
         self._use_azure_auth = False
         
@@ -86,13 +90,13 @@ class OpenAIEmbedding(BaseEmbedding):
             self.base_url = base_url
         elif azure_endpoint:
             # Azure-compatible mode: construct deployment-based URL
-            deployment = getattr(settings.embedding, 'deployment_name', None) or self.model
+            deployment = self._valid_str(getattr(settings.embedding, 'deployment_name', None)) or self.model
             self.base_url = f"{azure_endpoint.rstrip('/')}/openai/deployments/{deployment}"
             self._use_azure_auth = True
             if not self.api_version:
                 self.api_version = "2024-02-15-preview"
         else:
-            settings_base_url = getattr(settings.embedding, 'base_url', None)
+            settings_base_url = self._valid_str(getattr(settings.embedding, 'base_url', None))
             self.base_url = settings_base_url if settings_base_url else self.DEFAULT_BASE_URL
         
         # Store any additional kwargs for future use
